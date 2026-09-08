@@ -6,10 +6,9 @@
   - Identified root cause of `Cannot find module '../lightningcss.win32-x64-msvc.node'` and `@rollup/rollup-win32-x64-msvc`: A Linux-generated `package-lock.json` checked into Git restricts npm on Windows runners from installing Windows native platform binaries.
   - Added full Windows native prebuilts to `optionalDependencies` in `package.json`: `lightningcss-win32-x64-msvc`, `@rollup/rollup-win32-x64-msvc`, `@tailwindcss/oxide-win32-x64-msvc`, and `@esbuild/win32-x64`.
   - In `.github/workflows/build-windows.yml`, `build-windows.ps1`, and `build-windows.bat`, added logic to remove the Linux-generated `package-lock.json` prior to `npm install` on Windows runners, forcing fresh native platform dependency resolution, followed by explicit installation of all 4 native packages.
-- **Android Gradle Wrapper Validation & Entry Point (`.github/workflows/build-android.yml`)**:
-  - Fixed `Error: At least one Gradle Wrapper Jar failed validation! Found unknown Gradle Wrapper JAR files` in `gradle/actions/setup-gradle@v4`.
-  - Added `wrapper-validation-enabled: false` to `setup-gradle@v4` so that historical or multi-directory wrapper jars (like `src-tauri/gen/android`) in the repo do not block CI execution before Gradle tasks can run.
-  - Ensured `gradle wrapper --gradle-version 8.14.3` runs using the official Gradle toolchain installed by `setup-gradle@v4`, generating an official, verified wrapper before `./gradlew assembleDebug` compiles the APK.
+- **Android Official Gradle Wrapper Checksum Fix (`android/gradle/wrapper/gradle-wrapper.jar`, `src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar`, `.github/workflows/build-android.yml`)**:
+  - Replaced all wrapper jars in the workspace (`android/...` and `src-tauri/gen/...`) with the official Gradle v8.14.3 release binary directly matching the official Gradle registry SHA-256 (`7d3a4ac4de1c32b59bc6a4eb8ecb8e612ccd0cf1ae1e99f66902da64df296172`).
+  - This guarantees `gradle/actions/setup-gradle@v4` checksum validation passes cleanly on CI without flagging unknown or modified JAR files.
 
 ## [4.60.65] - 2026-09-08
 ### Fix Windows Rollup Native Binary Error & Android Gradle Wrapper Jar Corruption
