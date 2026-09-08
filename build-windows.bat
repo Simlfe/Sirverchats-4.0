@@ -25,6 +25,7 @@ if %errorlevel% neq 0 (
 
 echo [1/3] Installing dependencies...
 call npm install
+call npm install --no-save @rollup/rollup-win32-x64-msvc
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to install dependencies.
     pause

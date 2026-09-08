@@ -37,7 +37,9 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: |
+          npm install
+          npm install --no-save @rollup/rollup-win32-x64-msvc
 
       - name: Build Web Assets
         run: npm run build

@@ -18,6 +18,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 Write-Host "[1/3] Installing NPM dependencies..." -ForegroundColor Yellow
 npm install
+npm install --no-save @rollup/rollup-win32-x64-msvc
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] npm install failed." -ForegroundColor Red
     exit 1

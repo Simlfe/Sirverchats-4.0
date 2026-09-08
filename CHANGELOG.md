@@ -1,5 +1,18 @@
 # Sirver Application Changelog
 
+## [4.60.65] - 2026-09-08
+### Fix Windows Rollup Native Binary Error & Android Gradle Wrapper Jar Corruption
+- **Windows Rollup Optional Dependency Fix (`package.json`, `.github/workflows/build-windows.yml`, `build-windows.ps1`, `build-windows.bat`)**:
+  - Resolved `Cannot find module @rollup/rollup-win32-x64-msvc (npm issue #4828)` during `npm run build` (`vite build`) on Windows.
+  - Added `@rollup/rollup-win32-x64-msvc` to `optionalDependencies` in `package.json`.
+  - Added explicit installation fallback (`npm install --no-save @rollup/rollup-win32-x64-msvc`) to `.github/workflows/build-windows.yml`, `build-windows.ps1`, and `build-windows.bat` to ensure native Windows compilation succeeds even if npm skips optional dependencies during lockfile evaluation.
+- **Android Gradle Wrapper Repair & Gitattributes (`android/gradle/wrapper/gradle-wrapper.jar`, `.gitattributes`, `.github/workflows/build-android.yml`)**:
+  - Fixed `Error: Invalid or corrupt jarfile ... gradle-wrapper.jar` during `./gradlew assembleDebug`.
+  - Replaced corrupted `android/gradle/wrapper/gradle-wrapper.jar` with a clean, fully verified Gradle 8.14.3 wrapper binary.
+  - Created root `.gitattributes` file declaring `*.jar binary` (along with `.aar`, `.so`, images, and executables) to prevent Git CRLF line-ending corruption during checkout and commits.
+  - Integrated `gradle/actions/setup-gradle@v4` with explicit `gradle-version: '8.14.3'` in `.github/workflows/build-android.yml`.
+  - Added self-healing wrapper integrity check (`unzip -t`) with automatic regeneration (`gradle wrapper --gradle-version 8.14.3`) in the Android CI pipeline.
+
 ## [4.60.64] - 2026-09-08
 ### Fix CI/CD Workflows: Node 24 Action Runner Migration, Android Java Imports & Windows Tauri Bundler
 - **GitHub Actions Workflows Upgrade (`.github/workflows/build-android.yml`, `.github/workflows/build-windows.yml`, `.github/workflows/build-linux.yml`)**:
