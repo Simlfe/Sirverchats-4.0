@@ -17,8 +17,11 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "[1/3] Installing NPM dependencies..." -ForegroundColor Yellow
+if (Test-Path "package-lock.json") {
+    Remove-Item -Force "package-lock.json"
+}
 npm install
-npm install --no-save @rollup/rollup-win32-x64-msvc
+npm install --no-save @rollup/rollup-win32-x64-msvc lightningcss-win32-x64-msvc @tailwindcss/oxide-win32-x64-msvc @esbuild/win32-x64
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] npm install failed." -ForegroundColor Red
     exit 1

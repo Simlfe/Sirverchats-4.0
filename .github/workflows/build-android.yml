@@ -50,19 +50,15 @@ jobs:
       - name: Sync Capacitor Android Project
         run: npx cap sync android
 
-      - name: Validate Gradle Wrapper & Permissions
+      - name: Ensure Official Gradle Wrapper & Permissions
         working-directory: android
         run: |
+          gradle wrapper --gradle-version 8.14.3
           chmod +x gradlew
-          if ! unzip -t gradle/wrapper/gradle-wrapper.jar >/dev/null 2>&1; then
-            echo "::warning::Corrupt gradle-wrapper.jar detected. Rebuilding wrapper with Gradle 8.14.3..."
-            gradle wrapper --gradle-version 8.14.3
-            chmod +x gradlew
-          fi
 
       - name: Build Android Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Android Debug APK
         uses: actions/upload-artifact@v6

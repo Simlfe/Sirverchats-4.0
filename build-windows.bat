@@ -24,8 +24,9 @@ if %errorlevel% neq 0 (
 )
 
 echo [1/3] Installing dependencies...
+if exist package-lock.json del /f /q package-lock.json
 call npm install
-call npm install --no-save @rollup/rollup-win32-x64-msvc
+call npm install --no-save @rollup/rollup-win32-x64-msvc lightningcss-win32-x64-msvc @tailwindcss/oxide-win32-x64-msvc @esbuild/win32-x64
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to install dependencies.
     pause
