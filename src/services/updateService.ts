@@ -289,6 +289,7 @@ class UpdateServiceClass {
     repoName: string;
     rawList: string[];
     isRollback?: boolean;
+    downloadUrl?: string;
   } | null> {
     try {
       console.log(`[AutoUpdater] Scanning GitHub repositories for user '${owner}' matching prefix '${prefix}'...`);
@@ -361,17 +362,10 @@ class UpdateServiceClass {
       for (const repo of matchingRepos) {
         const branch = repo.default_branch || 'main';
 
-        // 1. Direct version extraction from repository name (e.g., sirverchats-1.0 -> 1.0)
-        const nameMatch = repo.name.match(new RegExp(`^${normalizedPrefix}[-_.]?v?([0-9]+(?:\\.[0-9]+)*)`, 'i'));
-        if (nameMatch && nameMatch[1]) {
-          const repoVersion = nameMatch[1];
-          versionToRepoMap.set(repoVersion, repo.name);
-          allFoundVersions.push(repoVersion);
-        }
-
-        // 2. Candidate paths for the versions manifest file: "versions", "versions.txt", "updates/latest.json"
+        // 1. Candidate paths for the versions manifest file: "versions", "versions.json", "versions.txt", "updates/latest.json"
         const candidates = [
           `https://raw.githubusercontent.com/${owner}/${repo.name}/${branch}/versions`,
+          `https://raw.githubusercontent.com/${owner}/${repo.name}/${branch}/versions.json`,
           `https://raw.githubusercontent.com/${owner}/${repo.name}/${branch}/versions.txt`,
           `https://raw.githubusercontent.com/${owner}/${repo.name}/${branch}/version.txt`,
           `https://raw.githubusercontent.com/${owner}/${repo.name}/${branch}/updates/latest.json`,
@@ -390,22 +384,35 @@ class UpdateServiceClass {
           }
         }
 
+        let foundExplicitVersionInRepo = false;
+
         if (versionsText) {
-          // Check if JSON (e.g. updates/latest.json)
+          // Check if JSON (e.g. versions.json or updates/latest.json)
           if (versionsText.trim().startsWith('{')) {
             try {
               const json = JSON.parse(versionsText);
+              if (Array.isArray(json.versions)) {
+                for (const v of json.versions) {
+                  if (typeof v === 'string' && v.trim()) {
+                    versionToRepoMap.set(v.trim(), repo.name);
+                    allFoundVersions.push(v.trim());
+                    foundExplicitVersionInRepo = true;
+                  }
+                }
+              }
+              if (json.current_version && typeof json.current_version === 'string') {
+                versionToRepoMap.set(json.current_version.trim(), repo.name);
+                allFoundVersions.push(json.current_version.trim());
+                foundExplicitVersionInRepo = true;
+              }
               if (json.version && typeof json.version === 'string') {
-                versionToRepoMap.set(json.version, repo.name);
-                allFoundVersions.push(json.version);
+                versionToRepoMap.set(json.version.trim(), repo.name);
+                allFoundVersions.push(json.version.trim());
+                foundExplicitVersionInRepo = true;
               }
             } catch {}
           } else {
-            // Parse plain lines: e.g.
-            // 0.0.1
-            // 0.0.2
-            // 0.1.0
-            // 1.0
+            // Parse plain text lines: e.g. "1.0"
             const lines = versionsText
               .split(/\r?\n/)
               .map((l) => l.trim())
@@ -414,18 +421,52 @@ class UpdateServiceClass {
             for (const line of lines) {
               versionToRepoMap.set(line, repo.name);
               allFoundVersions.push(line);
+              foundExplicitVersionInRepo = true;
             }
+          }
+        }
+
+        // 2. If NO explicit versions manifest file in repo, check GitHub Releases for tags
+        if (!foundExplicitVersionInRepo) {
+          try {
+            const relResp = await fetch(`https://api.github.com/repos/${owner}/${repo.name}/releases?per_page=10`, {
+              headers: { Accept: 'application/vnd.github.v3+json' },
+            });
+            if (relResp.ok) {
+              const releases = await relResp.json();
+              if (Array.isArray(releases) && releases.length > 0) {
+                for (const rel of releases) {
+                  const tagVer = (rel.tag_name || '').replace(/^v/, '').trim();
+                  if (tagVer) {
+                    versionToRepoMap.set(tagVer, repo.name);
+                    allFoundVersions.push(tagVer);
+                    foundExplicitVersionInRepo = true;
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+
+        // 3. Fallback ONLY if repo has NO versions manifest file and NO releases at all
+        // Only match full version patterns like "sirverchats-1.0.1" (not random numbers or branch tags)
+        if (!foundExplicitVersionInRepo) {
+          const nameMatch = repo.name.match(new RegExp(`^${normalizedPrefix}[-_.]v?([0-9]+(?:\\.[0-9]+)+)$`, 'i'));
+          if (nameMatch && nameMatch[1]) {
+            const repoVersion = nameMatch[1];
+            versionToRepoMap.set(repoVersion, repo.name);
+            allFoundVersions.push(repoVersion);
           }
         }
       }
 
       // DOUBLE CHECK 2: Is version found?
       if (allFoundVersions.length === 0) {
-        console.warn(`[AutoUpdater] Double Check 2/2: Version NOT FOUND in repository '${matchingRepos[0].name}'. No 'versions' file or versioned repo name found.`);
+        console.warn(`[AutoUpdater] Double Check 2/2: Version NOT FOUND in repository '${matchingRepos[0].name}'. No 'versions' file or releases found.`);
         return null;
       }
 
-      console.log(`[AutoUpdater] Double Check 2/2: Version FOUND on GitHub:`, Array.from(new Set(allFoundVersions)));
+      console.log(`[AutoUpdater] Double Check 2/2: Versions FOUND on GitHub:`, Array.from(new Set(allFoundVersions)));
 
       // Deduplicate and sort versions descending (highest version first)
       const uniqueVersions = Array.from(new Set(allFoundVersions)).sort((a, b) => semverCompare(b, a));
@@ -437,12 +478,14 @@ class UpdateServiceClass {
       // Case 1: Normal Upgrade — A strictly higher version exists on GitHub
       if (semverCompare(currentVer, highestVersionOnGitHub) < 0) {
         console.log(`[AutoUpdater] Higher version found in repo ${bestRepoName}: v${highestVersionOnGitHub} (current: v${currentVer})`);
+        const downloadUrl = await this.resolveDownloadUrlForVersion(owner, bestRepoName, highestVersionOnGitHub, this.state.platform);
         return {
           hasUpdate: true,
           newVersion: highestVersionOnGitHub,
           repoName: bestRepoName,
           rawList: uniqueVersions,
           isRollback: false,
+          downloadUrl: downloadUrl || undefined,
         };
       }
 
@@ -457,12 +500,14 @@ class UpdateServiceClass {
         console.warn(
           `[AutoUpdater] Current version v${currentVer} was NOT found on GitHub! Initiating safe rollback to highest verified release: v${highestVersionOnGitHub} (from repo ${bestRepoName})`
         );
+        const downloadUrl = await this.resolveDownloadUrlForVersion(owner, bestRepoName, highestVersionOnGitHub, this.state.platform);
         return {
           hasUpdate: true,
           newVersion: highestVersionOnGitHub,
           repoName: bestRepoName,
           rawList: uniqueVersions,
           isRollback: true,
+          downloadUrl: downloadUrl || undefined,
         };
       }
 
@@ -471,6 +516,73 @@ class UpdateServiceClass {
       console.warn('[AutoUpdater] Error in checkGitHubReposAndVersions:', e);
       return null;
     }
+  }
+
+  /**
+   * Resolves a verified, real download URL for an update package on GitHub.
+   * Priority:
+   * 1. GitHub Releases pre-compiled binary asset for current platform (.exe, .apk, .AppImage, .deb, etc.)
+   * 2. Release tag archive
+   * 3. Default branch archive
+   */
+  public async resolveDownloadUrlForVersion(
+    owner: string,
+    repo: string,
+    version: string,
+    platform: string
+  ): Promise<string | null> {
+    // 1. Check GitHub Releases for pre-compiled platform binaries
+    try {
+      const relResp = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`, {
+        headers: { Accept: 'application/vnd.github.v3+json' },
+      });
+      if (relResp.ok) {
+        const releases = await relResp.json();
+        if (Array.isArray(releases)) {
+          const matchRel = releases.find(
+            (r: any) => r.tag_name === `v${version}` || r.tag_name === version
+          );
+          if (matchRel && Array.isArray(matchRel.assets) && matchRel.assets.length > 0) {
+            let asset = null;
+            if (platform === 'windows') {
+              asset = matchRel.assets.find((a: any) => a.name.endsWith('.exe') || a.name.endsWith('.msi'));
+            } else if (platform === 'android') {
+              asset = matchRel.assets.find((a: any) => a.name.endsWith('.apk'));
+            } else if (platform === 'linux') {
+              asset = matchRel.assets.find((a: any) => a.name.endsWith('.AppImage') || a.name.endsWith('.deb'));
+            }
+            if (!asset && matchRel.assets.length > 0) {
+              asset = matchRel.assets[0];
+            }
+            if (asset && asset.browser_download_url) {
+              return asset.browser_download_url;
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 2. Check if git release tag archive exists (probe HEAD to ensure it's not 404)
+    try {
+      const tagUrl = `https://github.com/${owner}/${repo}/archive/refs/tags/v${version}.zip`;
+      const probe = await fetch(tagUrl, { method: 'HEAD', cache: 'no-store' });
+      if (probe.ok || probe.status === 200) {
+        return tagUrl;
+      }
+    } catch (e) {}
+
+    // 3. Check branch archive: e.g. main/master branch zip
+    for (const branch of ['main', 'master']) {
+      const candidateUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/${branch}.zip`;
+      try {
+        const probe = await fetch(candidateUrl, { method: 'HEAD', cache: 'no-store' });
+        if (probe.ok || probe.status === 200) {
+          return candidateUrl;
+        }
+      } catch (e) {}
+    }
+
+    return null;
   }
 
   /**
@@ -611,10 +723,26 @@ class UpdateServiceClass {
           ? `Safe rollback to v${githubCheck.newVersion} (from repo '${githubCheck.repoName}') because current version is no longer active on GitHub.`
           : `New version v${githubCheck.newVersion} detected from repository '${githubCheck.repoName}'.`;
 
+        const availableUpdate: AppUpdateRecord | null = githubCheck.downloadUrl
+          ? {
+              id: `gh_${githubCheck.repoName}_${githubCheck.newVersion}`,
+              version: githubCheck.newVersion,
+              platform: this.state.platform,
+              channel: (this.state.channel as any) || 'stable',
+              download_url: githubCheck.downloadUrl,
+              release_notes: releaseNotes,
+              mandatory: isRollback,
+              published: true,
+              created: new Date().toISOString(),
+              updated: new Date().toISOString(),
+            }
+          : null;
+
         this.updateState({
           status: 'available',
           newVersion: githubCheck.newVersion,
           sourceRepo: githubCheck.repoName,
+          availableUpdate,
           isRollback,
           releaseNotes,
           lastCheckTime: nowIso,
@@ -622,7 +750,8 @@ class UpdateServiceClass {
           dismissedNotification: false,
         });
 
-        if (settings.updates?.autoDownload ?? true) {
+        // Only auto-download if we have a valid, verified download URL
+        if (githubCheck.downloadUrl && (settings.updates?.autoDownload ?? true)) {
           this.startDownload();
         }
 
@@ -647,10 +776,26 @@ class UpdateServiceClass {
         const githubCheck = await this.checkGitHubReposAndVersions(githubOwner, repoPrefix);
         if (githubCheck && githubCheck.hasUpdate) {
           this.isChecking = false;
+          const availableUpdate: AppUpdateRecord | null = githubCheck.downloadUrl
+            ? {
+                id: `gh_${githubCheck.repoName}_${githubCheck.newVersion}`,
+                version: githubCheck.newVersion,
+                platform: this.state.platform,
+                channel: (this.state.channel as any) || 'stable',
+                download_url: githubCheck.downloadUrl,
+                release_notes: `New version v${githubCheck.newVersion} detected from repository '${githubCheck.repoName}'.`,
+                mandatory: false,
+                published: true,
+                created: new Date().toISOString(),
+                updated: new Date().toISOString(),
+              }
+            : null;
+
           this.updateState({
             status: 'available',
             newVersion: githubCheck.newVersion,
             sourceRepo: githubCheck.repoName,
+            availableUpdate,
             releaseNotes: `New version v${githubCheck.newVersion} detected from repository '${githubCheck.repoName}'.`,
             lastCheckTime: new Date().toISOString(),
             mandatory: false,
@@ -763,30 +908,34 @@ class UpdateServiceClass {
     // B. PocketBase / Web / DownloadManager Fallback
     let update = this.state.availableUpdate;
 
-    // If discovered via GitHub repo but no PocketBase record, synthesize one or look for release binary
-    if (!update && this.state.newVersion && this.state.sourceRepo) {
+    // If discovered via GitHub repo but no PocketBase record or download URL, resolve verified download URL
+    if ((!update || !update.download_url) && this.state.newVersion && this.state.sourceRepo) {
       const owner = getCachedUserSettings().updates?.githubOwner || 'Simlfe';
       const repo = this.state.sourceRepo;
       const ver = this.state.newVersion;
-      update = {
-        id: `gh_${repo}_${ver}`,
-        version: ver,
-        platform: this.state.platform,
-        channel: (this.state.channel as any) || 'stable',
-        download_url: `https://github.com/${owner}/${repo}/archive/refs/tags/v${ver}.zip`,
-        release_notes: this.state.releaseNotes || `Update v${ver} from ${repo}`,
-        mandatory: false,
-        published: true,
-        created: new Date().toISOString(),
-        updated: new Date().toISOString(),
-      };
-      this.updateState({ availableUpdate: update });
+      const resolvedUrl = await this.resolveDownloadUrlForVersion(owner, repo, ver, this.state.platform);
+
+      if (resolvedUrl) {
+        update = {
+          id: `gh_${repo}_${ver}`,
+          version: ver,
+          platform: this.state.platform,
+          channel: (this.state.channel as any) || 'stable',
+          download_url: resolvedUrl,
+          release_notes: this.state.releaseNotes || `Update v${ver} from ${repo}`,
+          mandatory: !!this.state.isRollback,
+          published: true,
+          created: new Date().toISOString(),
+          updated: new Date().toISOString(),
+        };
+        this.updateState({ availableUpdate: update });
+      }
     }
 
     if (!update || !update.download_url) {
       this.updateState({
         status: 'error',
-        errorMessage: 'No download URL available for update',
+        errorMessage: `No installable release binary found for v${this.state.newVersion || ''} on GitHub.`,
       });
       return;
     }

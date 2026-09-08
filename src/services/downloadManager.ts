@@ -510,20 +510,23 @@ class DownloadManagerService {
           }
         } else {
           // Auto trigger browser download to physical OS Downloads folder in web mode
-          try {
-            const objectUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = objectUrl;
-            link.download = item.savedFilename;
-            link.style.display = 'none';
-            document.body.appendChild(link);
-            link.click();
-            setTimeout(() => {
-              document.body.removeChild(link);
-              URL.revokeObjectURL(objectUrl);
-            }, 1000);
-          } catch (e) {
-            console.warn('Auto browser download trigger error:', e);
+          // Only trigger for normal user files, NEVER for background app updates!
+          if (!item.attachmentId?.startsWith('app_update_')) {
+            try {
+              const objectUrl = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = objectUrl;
+              link.download = item.savedFilename;
+              link.style.display = 'none';
+              document.body.appendChild(link);
+              link.click();
+              setTimeout(() => {
+                document.body.removeChild(link);
+                URL.revokeObjectURL(objectUrl);
+              }, 1000);
+            } catch (e) {
+              console.warn('Auto browser download trigger error:', e);
+            }
           }
           item.status = 'completed';
           item.errorMessage = undefined;
@@ -532,7 +535,7 @@ class DownloadManagerService {
         this.saveHistory();
         this.syncAttachmentDownloadedFile(item);
       } else {
-        if (isTauriEnvironment()) {
+        if (isTauriEnvironment() || item.attachmentId?.startsWith('app_update_')) {
           item.status = 'failed';
           item.errorMessage = `HTTP Error ${xhr.status} when fetching download file`;
           console.error(`[DownloadManager] ${item.errorMessage}`);
@@ -548,8 +551,16 @@ class DownloadManagerService {
     xhr.onerror = () => {
       activeXHRs.delete(item.id);
       activeSpeedTrackers.delete(item.id);
-      // CORS or network error fallback
-      this.fallbackDirectBrowserDownload(item, 'Network or CORS Connection Error');
+      if (isTauriEnvironment() || item.attachmentId?.startsWith('app_update_')) {
+        item.status = 'failed';
+        item.errorMessage = 'Network or connection error while downloading update';
+        console.error(`[DownloadManager] ${item.errorMessage}`);
+        this.saveHistory();
+        this.syncAttachmentDownloadedFile(item);
+      } else {
+        // CORS or network error fallback
+        this.fallbackDirectBrowserDownload(item, 'Network or CORS Connection Error');
+      }
     };
 
     xhr.onabort = () => {
@@ -564,6 +575,15 @@ class DownloadManagerService {
   }
 
   private fallbackDirectBrowserDownload(item: DownloadItem, errorContext: string) {
+    // App updates MUST NEVER open an external browser window or trigger direct browser navigation
+    if (item.attachmentId?.startsWith('app_update_')) {
+      item.status = 'failed';
+      item.errorMessage = errorContext;
+      this.saveHistory();
+      this.syncAttachmentDownloadedFile(item);
+      return;
+    }
+
     try {
       if (item.downloadUrl) {
         const link = document.createElement('a');
@@ -671,6 +691,10 @@ class DownloadManagerService {
     } else {
       // Web browser environment: trigger browser download of the saved blob / file
       if (item) {
+        // App updates are handled internally in the application, NEVER open browser!
+        if (item.attachmentId?.startsWith('app_update_')) {
+          return false;
+        }
         const blob = await getBlobFromDB(item.id);
         if (blob) {
           try {

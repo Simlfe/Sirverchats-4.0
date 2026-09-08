@@ -192,7 +192,7 @@ export default function DownloadsTabContent({
               : `Opened/Saved file: ${item.savedFilename}`
           );
         }
-      } else if (item.downloadUrl) {
+      } else if (item.downloadUrl && !item.attachmentId?.startsWith('app_update_')) {
         window.open(item.downloadUrl, '_blank', 'noopener,noreferrer');
       } else {
         showToast(

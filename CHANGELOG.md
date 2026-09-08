@@ -1,5 +1,21 @@
 # Sirver Application Changelog
 
+## [4.60.67] - 2026-09-08
+### Root-Cause Fix: In-App Updates Without Browser Redirection & Accurate Version Discovery
+- **Completely Eliminated Browser Redirection on Update (`src/services/downloadManager.ts`, `src/services/updateService.ts`, `src/components/DownloadsTabContent.tsx`)**:
+  - Identified root cause of unwanted browser launch on app startup: When an update download failed (e.g., non-existent URL or network error), `DownloadManager.fallbackDirectBrowserDownload` and `openFile` triggered `window.open` / `<a target="_blank">` navigation to the URL, sending the user to a 404 page in an external browser.
+  - Added strict guards (`item.attachmentId?.startsWith('app_update_')`) preventing `DownloadManager`, `fallbackDirectBrowserDownload`, `openFile`, and `openContainingFolder` from ever calling `window.open` or triggering direct browser navigation for internal updates.
+  - Update failures now cleanly update state within the application (`status: 'error'`, `status: 'failed'`), keeping all error handling, retry prompts, and notifications 100% inside the app UI without any external browser interaction.
+- **Accurate Repository Manifest Version Resolution (`src/services/updateService.ts`)**:
+  - Resolved root cause of false update detection: Previously, the regex in `checkGitHubReposAndVersions` extracted `4.0` from repo name `Sirverchats-4.0` even though the repo's authoritative `versions` and `versions.json` files specified `1.0`.
+  - Prioritized explicit `versions`, `versions.json`, and `version.txt` manifest files inside the repository over repository titles. If a repository defines an explicit version manifest, the versions inside that file are authoritative.
+  - Added support for `versions.json` schemas (`versions` array, `current_version`, `version`).
+- **Verified Download URL Resolution & 404 Prevention (`src/services/updateService.ts`)**:
+  - Replaced hardcoded `archive/refs/tags/v${ver}.zip` URLs with `resolveDownloadUrlForVersion(owner, repo, version, platform)`.
+  - Searches GitHub Releases for compiled platform binaries (`.exe`/`.msi` for Windows, `.apk` for Android, `.AppImage`/`.deb` for Linux).
+  - Probes existence of release tag archives or default branch archives with HEAD verification before assigning download URLs.
+  - If no downloadable release package is published yet, the update state remains safely in `'available'` without initiating auto-downloads or broken 404 links.
+
 ## [4.60.66] - 2026-09-08
 ### Root-Cause Fix: Windows Cross-Platform Native Binaries & Android Gradle Wrapper Entry Point
 - **Windows Native Toolchain Resolution (`package.json`, `.github/workflows/build-windows.yml`, `build-windows.ps1`, `build-windows.bat`)**:
